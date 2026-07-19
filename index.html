@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KidsMusic — SDK-Test (Sperrbildschirm)</title>
+<style>
+:root { --gruen:#1DB954; --dunkel:#080810; --karte:#13131f; --akzent:#f7c948; --grau:#8888aa; }
+* { box-sizing:border-box; margin:0; padding:0; }
+body { background:var(--dunkel); color:#fff; font-family:system-ui,-apple-system,"Segoe UI",sans-serif;
+       padding:20px; max-width:680px; margin:0 auto; line-height:1.55; }
+h1 { font-size:1.45rem; color:var(--akzent); margin-bottom:6px; }
+h2 { font-size:1.02rem; margin:24px 0 8px; }
+p, li { color:#ddd; font-size:0.94rem; }
+.karte { background:var(--karte); border-radius:16px; padding:18px; margin:14px 0; }
+.hinweis { border-left:3px solid var(--akzent); padding-left:12px; color:var(--grau);
+           font-size:0.87rem; margin:12px 0; }
+ol { margin:10px 0 0 20px; } li { margin-bottom:7px; }
+button { background:var(--gruen); color:#000; border:0; border-radius:50px; font-weight:900;
+         font-size:1.05rem; padding:14px 28px; font-family:inherit; margin:6px 6px 0 0; }
+button:disabled { background:#2a2a3a; color:var(--grau); }
+button.zweit { background:rgba(255,255,255,.08); color:#fff; }
+.uhr { font-size:2.2rem; font-weight:900; color:var(--gruen); font-variant-numeric:tabular-nums; }
+.zeile { display:flex; justify-content:space-between; gap:12px; padding:7px 0;
+         border-bottom:1px solid rgba(255,255,255,.07); font-size:0.9rem; }
+.zeile span:first-child { color:var(--grau); }
+.zeile span:last-child { font-weight:700; text-align:right; }
+#log { background:#07070d; border-radius:10px; padding:12px; margin-top:12px; font-size:0.78rem;
+       font-family:ui-monospace,SFMono-Regular,Menlo,monospace; color:#9fd; max-height:230px;
+       overflow-y:auto; white-space:pre-wrap; word-break:break-word; }
+.gut { color:var(--gruen); } .schlecht { color:#ff8080; }
+</style>
+</head>
+<body>
+
+<h1>SDK-Test: Überlebt die Wiedergabe das Sperren?</h1>
+<p>Einmaliger Versuchsaufbau. Er beantwortet die eine Frage, an der hängt, ob sich der Umbau
+von KidsMusic auf einen Player in der Seite lohnt — <strong>bevor</strong> jemand am Server etwas ändert.</p>
+
+<div class="hinweis">
+  Diese Seite gehört nicht zur App und liegt bewusst außerhalb des Heimnetzes: Spotify verlangt für
+  die Anmeldung HTTPS, und das hat GitHub Pages von Haus aus. Nach dem Test wird sie abgeschaltet.
+  Sie enthält nur die öffentliche Client ID — kein Passwort, kein Secret.
+</div>
+
+<h2>1 · Anmelden</h2>
+<div class="karte">
+  <p>Läuft auf <code>accounts.spotify.com</code>. Dein Passwort sieht diese Seite nie.</p>
+  <button id="loginBtn">Mit Spotify anmelden</button>
+  <button id="logoutBtn" class="zweit">Abmelden</button>
+</div>
+
+<h2>2 · Abspielen</h2>
+<div class="karte">
+  <p>Peppa Wutz, Folge 001 — eine echte, vollständige Folge, kein Vorschau-Schnipsel.</p>
+  <button id="playBtn" disabled>▶ Folge starten</button>
+  <div style="margin-top:14px">
+    <div class="zeile"><span>Player</span><span id="sPlayer">nicht verbunden</span></div>
+    <div class="zeile"><span>Zustand</span><span id="sZustand">–</span></div>
+    <div class="zeile"><span>Titel</span><span id="sTitel">–</span></div>
+    <div class="zeile"><span>Position</span><span id="sPos">–</span></div>
+  </div>
+</div>
+
+<h2>3 · Sperren</h2>
+<div class="karte">
+  <p><strong>Jetzt die Standby-Taste drücken, 30 Sekunden warten, entsperren.</strong>
+     Danach zeigen die Werte unten, was in der Zwischenzeit passiert ist.</p>
+  <div class="uhr" id="uhr">0,0 s</div>
+  <div style="margin-top:12px">
+    <div class="zeile"><span>Sichtbarkeitswechsel</span><span id="sWechsel">0</span></div>
+    <div class="zeile"><span>Längste Lücke der Uhr</span><span id="sLuecke">–</span></div>
+    <div class="zeile"><span>Position vor dem Sperren</span><span id="sVorher">–</span></div>
+    <div class="zeile"><span>Position nach dem Entsperren</span><span id="sNachher">–</span></div>
+    <div class="zeile"><span>Ergebnis</span><span id="sErgebnis">noch offen</span></div>
+  </div>
+</div>
+
+<h2>So liest du das Ergebnis</h2>
+<div class="karte">
+  <ol>
+    <li><strong>Ton war während der Sperre hörbar</strong> und die Position ist um die Wartezeit
+        weitergelaufen → die Wiedergabe überlebt das Sperren. Der Umbau lohnt sich.</li>
+    <li><strong>Stille, Position steht</strong> etwa dort, wo du gesperrt hast → sie überlebt es nicht.
+        Dann bleibt der Deeplink die bessere Lösung, und niemand muss Caddy anfassen.</li>
+  </ol>
+  <p style="margin-top:10px">Das Gehör entscheidet, nicht die Zahlen: Die Seite selbst wird beim
+     Sperren angehalten und kann sich irren. Achte darauf, ob der Ton weiterläuft.</p>
+</div>
+
+<div id="log">Bereit.</div>
+
+<script>
+// MUSS vor dem SDK-Skript stehen. Das SDK ruft diesen Namen auf, sobald es
+// geladen ist -- ist er zu dem Zeitpunkt noch nicht definiert, geht der
+// Aufruf ins Leere und der Player startet nie. Deshalb hier nur gemerkt,
+// dass es bereit ist; die eigentliche Arbeit macht das Skript weiter unten.
+window.sdkBereit = false;
+window.onSpotifyWebPlaybackSDKReady = function () {
+  window.sdkBereit = true;
+  if (typeof window.sdkStart === "function") window.sdkStart();
+};
+</script>
+<script src="https://sdk.scdn.co/spotify-player.js"></script>
+<script>
+"use strict";
+
+// Oeffentlich und unkritisch: Bei PKCE ist die Client ID nicht geheim, sie
+// steht bei jeder Anmeldung sichtbar in der URL. Das Secret bleibt auf dem
+// Server in /opt/kidsmusic/.env und taucht hier nirgends auf.
+const CLIENT_ID = "2cb5067a8bfe4fbc92088f1cad7a775b";
+const REDIRECT  = location.origin + location.pathname;
+const SCOPES    = "streaming user-read-email user-read-private user-modify-playback-state user-read-playback-state";
+const ALBUM     = "0IakudBXfN2aYXChl5sEK7";   // Peppa Wutz, Folge 001 -- aus der App geholt
+
+let token = null, player = null, deviceId = null;
+let letzterTick = Date.now(), groessteLuecke = 0, wechsel = 0;
+let posVorher = null;
+
+function log(text, klasse) {
+  const el = document.getElementById("log");
+  const zeit = new Date().toLocaleTimeString("de-DE");
+  el.innerHTML += `\n<span class="${klasse || ""}">${zeit}  ${text}</span>`;
+  el.scrollTop = el.scrollHeight;
+}
+function setz(id, wert) { document.getElementById(id).textContent = wert; }
+function mmss(ms) {
+  if (ms === null || ms === undefined) return "–";
+  const s = Math.floor(ms / 1000);
+  return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+}
+
+// --- PKCE ---------------------------------------------------------------
+
+function zufall(n) {
+  const a = new Uint8Array(n); crypto.getRandomValues(a);
+  return Array.from(a, b => ("0" + b.toString(16)).slice(-2)).join("").slice(0, n);
+}
+async function challenge(verifier) {
+  const roh = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+  return btoa(String.fromCharCode(...new Uint8Array(roh)))
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+}
+
+async function anmelden() {
+  const v = zufall(64);
+  sessionStorage.setItem("pkce_v", v);
+  const p = new URLSearchParams({
+    client_id: CLIENT_ID, response_type: "code", redirect_uri: REDIRECT,
+    scope: SCOPES, code_challenge_method: "S256", code_challenge: await challenge(v),
+  });
+  location.href = "https://accounts.spotify.com/authorize?" + p;
+}
+
+async function codeEinloesen(code) {
+  const v = sessionStorage.getItem("pkce_v");
+  const r = await fetch("https://accounts.spotify.com/api/token", {
+    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "authorization_code", code, redirect_uri: REDIRECT,
+      client_id: CLIENT_ID, code_verifier: v,
+    }),
+  });
+  const d = await r.json();
+  if (!d.access_token) { log("Anmeldung fehlgeschlagen: " + JSON.stringify(d), "schlecht"); return; }
+  token = d.access_token;
+  localStorage.setItem("tok", token);
+  history.replaceState({}, "", REDIRECT);
+  log("angemeldet", "gut");
+  playerStarten();
+}
+
+// --- SDK ----------------------------------------------------------------
+
+function playerStarten() {
+  if (!token || !window.Spotify) return;
+  player = new Spotify.Player({
+    name: "KidsMusic Sperrtest",
+    getOAuthToken: cb => cb(token),
+    volume: 0.8,
+  });
+
+  player.addListener("ready", ({ device_id }) => {
+    deviceId = device_id;
+    setz("sPlayer", "verbunden");
+    document.getElementById("playBtn").disabled = false;
+    log("Player bereit, Geraete-ID " + device_id.slice(0, 12) + "…", "gut");
+  });
+  player.addListener("not_ready", () => { setz("sPlayer", "offline"); log("Player offline", "schlecht"); });
+  player.addListener("initialization_error", ({ message }) => log("Init-Fehler: " + message, "schlecht"));
+  player.addListener("authentication_error", ({ message }) => log("Auth-Fehler: " + message, "schlecht"));
+  player.addListener("account_error", ({ message }) =>
+    log("Konto-Fehler (Premium noetig?): " + message, "schlecht"));
+  player.addListener("playback_error", ({ message }) => log("Wiedergabe-Fehler: " + message, "schlecht"));
+
+  player.addListener("player_state_changed", zustand => {
+    if (!zustand) { setz("sZustand", "kein Zustand"); return; }
+    setz("sZustand", zustand.paused ? "pausiert" : "spielt");
+    setz("sTitel", (zustand.track_window.current_track || {}).name || "–");
+    setz("sPos", mmss(zustand.position));
+  });
+
+  player.connect().then(ok => log(ok ? "verbunden" : "Verbindung abgelehnt", ok ? "gut" : "schlecht"));
+}
+
+// Wird vom Vorab-Skript gerufen, sobald das SDK geladen ist -- und unten
+// beim Start noch einmal, falls das SDK schon vorher fertig war.
+window.sdkStart = function () { log("SDK geladen"); if (token) playerStarten(); };
+
+async function abspielen() {
+  if (!deviceId) return;
+  log("starte Album …");
+  const r = await fetch("https://api.spotify.com/v1/me/player/play?device_id=" + deviceId, {
+    method: "PUT",
+    headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+    body: JSON.stringify({ context_uri: "spotify:album:" + ALBUM }),
+  });
+  if (r.ok || r.status === 204) log("laeuft — jetzt sperren!", "gut");
+  else log("Start fehlgeschlagen: HTTP " + r.status + " " + (await r.text()).slice(0, 160), "schlecht");
+}
+
+// --- Messung ------------------------------------------------------------
+// Die Uhr misst, wie lange die Seite eingefroren war. Sie beweist nicht,
+// ob Ton lief -- das entscheidet das Ohr. Sie zeigt aber, ob die Position
+// waehrend der Sperre weitergelaufen ist.
+
+const start = Date.now();
+setInterval(() => {
+  const jetzt = Date.now();
+  const luecke = jetzt - letzterTick;
+  if (luecke > groessteLuecke) { groessteLuecke = luecke; setz("sLuecke", (luecke / 1000).toFixed(1) + " s"); }
+  letzterTick = jetzt;
+  setz("uhr", ((jetzt - start) / 1000).toFixed(1).replace(".", ",") + " s");
+}, 100);
+
+document.addEventListener("visibilitychange", async () => {
+  wechsel++;
+  setz("sWechsel", String(wechsel));
+  if (!player) return;
+  const z = await player.getCurrentState();
+  if (document.hidden) {
+    posVorher = z ? z.position : null;
+    setz("sVorher", mmss(posVorher));
+    log("versteckt bei " + mmss(posVorher));
+  } else {
+    const nachher = z ? z.position : null;
+    setz("sNachher", mmss(nachher));
+    log("wieder sichtbar bei " + mmss(nachher));
+    if (posVorher !== null && nachher !== null) {
+      const gelaufen = nachher - posVorher;
+      const weg = groessteLuecke;
+      if (gelaufen > weg * 0.5) {
+        setz("sErgebnis", "lief weiter");
+        log("Position um " + (gelaufen / 1000).toFixed(1) + " s weiter — spricht fuer Weiterlaufen", "gut");
+      } else {
+        setz("sErgebnis", "stand still");
+        log("Position kaum weiter (" + (gelaufen / 1000).toFixed(1) + " s) — spricht fuer Abbruch", "schlecht");
+      }
+    }
+  }
+});
+
+// --- Start --------------------------------------------------------------
+
+document.getElementById("loginBtn").onclick = anmelden;
+document.getElementById("playBtn").onclick = abspielen;
+document.getElementById("logoutBtn").onclick = () => {
+  localStorage.removeItem("tok"); sessionStorage.clear();
+  if (player) player.disconnect();
+  location.href = REDIRECT;
+};
+
+(function init() {
+  const code = new URLSearchParams(location.search).get("code");
+  const fehler = new URLSearchParams(location.search).get("error");
+  if (fehler) { log("Spotify hat abgelehnt: " + fehler, "schlecht"); return; }
+  if (code) { codeEinloesen(code); return; }
+  const gespeichert = localStorage.getItem("tok");
+  if (gespeichert) {
+    token = gespeichert;
+    log("Token aus dem Speicher");
+    // War das SDK schon fertig, bevor dieses Skript lief, kommt kein
+    // Rueckruf mehr -- dann hier selbst starten.
+    if (window.sdkBereit) playerStarten();
+  } else {
+    log("Bitte anmelden.");
+  }
+})();
+</script>
+</body>
+</html>
