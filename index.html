@@ -54,6 +54,10 @@ von KidsMusic auf einen Player in der Seite lohnt — <strong>bevor</strong> jem
 <div class="karte">
   <p>Peppa Wutz, Folge 001 — eine echte, vollständige Folge, kein Vorschau-Schnipsel.</p>
   <button id="playBtn" disabled>▶ Folge starten</button>
+  <button id="resumeBtn" class="zweit" disabled>▶ Weiter (falls pausiert)</button>
+  <p style="margin-top:8px;color:var(--grau);font-size:0.85rem">
+    Bleibt der Zustand auf „pausiert", diesen zweiten Knopf antippen. Safari lässt Ton
+    am ehesten zu, wenn er direkt aus einer Berührung heraus kommt.</p>
   <div style="margin-top:14px">
     <div class="zeile"><span>Player</span><span id="sPlayer">nicht verbunden</span></div>
     <div class="zeile"><span>Zustand</span><span id="sZustand">–</span></div>
@@ -184,6 +188,7 @@ function playerStarten() {
     deviceId = device_id;
     setz("sPlayer", "verbunden");
     document.getElementById("playBtn").disabled = false;
+    document.getElementById("resumeBtn").disabled = false;
     log("Player bereit, Geraete-ID " + device_id.slice(0, 12) + "…", "gut");
   });
   player.addListener("not_ready", () => { setz("sPlayer", "offline"); log("Player offline", "schlecht"); });
@@ -209,14 +214,41 @@ window.sdkStart = function () { log("SDK geladen"); if (token) playerStarten(); 
 
 async function abspielen() {
   if (!deviceId) return;
+
+  // MUSS als Erstes im Klick passieren, noch vor jedem await auf etwas
+  // anderes. Safari erlaubt Tonausgabe nur aus einer Ereigniskette, die
+  // direkt an einer Beruehrung haengt; wird zuerst das Netz befragt, ist
+  // die Kette unterbrochen und die Wiedergabe pausiert sofort wieder.
+  try {
+    await player.activateElement();
+    log("Player im Klick freigeschaltet", "gut");
+  } catch (e) {
+    log("activateElement fehlgeschlagen: " + e.message, "schlecht");
+  }
+
   log("starte Album …");
   const r = await fetch("https://api.spotify.com/v1/me/player/play?device_id=" + deviceId, {
     method: "PUT",
     headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
     body: JSON.stringify({ context_uri: "spotify:album:" + ALBUM }),
   });
-  if (r.ok || r.status === 204) log("laeuft — jetzt sperren!", "gut");
-  else log("Start fehlgeschlagen: HTTP " + r.status + " " + (await r.text()).slice(0, 160), "schlecht");
+  if (!(r.ok || r.status === 204)) {
+    log("Start fehlgeschlagen: HTTP " + r.status + " " + (await r.text()).slice(0, 160), "schlecht");
+    return;
+  }
+
+  // Nach dem Uebertragen bleibt die Wiedergabe auf iOS haeufig stehen.
+  // Ein resume() aus demselben Klick heraus stupst sie an.
+  setTimeout(async () => {
+    const z = await player.getCurrentState();
+    if (z && z.paused) {
+      log("stand auf pausiert — stupse mit resume()");
+      try { await player.resume(); log("resume() geschickt", "gut"); }
+      catch (e) { log("resume() fehlgeschlagen: " + e.message, "schlecht"); }
+    } else if (z) {
+      log("laeuft — jetzt sperren!", "gut");
+    }
+  }, 900);
 }
 
 // --- Messung ------------------------------------------------------------
@@ -264,6 +296,13 @@ document.addEventListener("visibilitychange", async () => {
 
 document.getElementById("loginBtn").onclick = anmelden;
 document.getElementById("playBtn").onclick = abspielen;
+document.getElementById("resumeBtn").onclick = async () => {
+  // Bewusst ohne vorheriges await: der Aufruf soll so nah wie moeglich an
+  // der Beruehrung haengen.
+  try { await player.activateElement(); } catch (e) { /* schon aktiv */ }
+  try { await player.resume(); log("resume() aus Beruehrung", "gut"); }
+  catch (e) { log("resume() fehlgeschlagen: " + e.message, "schlecht"); }
+};
 document.getElementById("logoutBtn").onclick = () => {
   localStorage.removeItem("tok"); sessionStorage.clear();
   if (player) player.disconnect();
