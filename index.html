@@ -73,23 +73,31 @@ von KidsMusic auf einen Player in der Seite lohnt — <strong>bevor</strong> jem
   <div class="uhr" id="uhr">0,0 s</div>
   <div style="margin-top:12px">
     <div class="zeile"><span>Sichtbarkeitswechsel</span><span id="sWechsel">0</span></div>
-    <div class="zeile"><span>Längste Lücke der Uhr</span><span id="sLuecke">–</span></div>
-    <div class="zeile"><span>Position vor dem Sperren</span><span id="sVorher">–</span></div>
-    <div class="zeile"><span>Position nach dem Entsperren</span><span id="sNachher">–</span></div>
+    <div class="zeile"><span>Albumzeit vor dem Sperren</span><span id="sVorher">–</span></div>
+    <div class="zeile"><span>Albumzeit nach dem Entsperren</span><span id="sNachher">–</span></div>
+    <div class="zeile"><span><strong>Weg laut Wanduhr</strong></span><span id="sWand">–</span></div>
+    <div class="zeile"><span><strong>Davon Ton gelaufen</strong></span><span id="sTon">–</span></div>
     <div class="zeile"><span>Ergebnis</span><span id="sErgebnis">noch offen</span></div>
+  </div>
+  <div class="hinweis" style="margin-top:14px">
+    Nur die beiden fetten Zeilen zählen. Stehen dort etwa gleiche Werte, lief der Ton durch.
+    Ist „Ton gelaufen" deutlich kleiner, hat iOS die Wiedergabe unterwegs beendet — und die
+    Differenz sagt dir, nach wie vielen Sekunden.
   </div>
 </div>
 
 <h2>So liest du das Ergebnis</h2>
 <div class="karte">
   <ol>
-    <li><strong>Ton war während der Sperre hörbar</strong> und die Position ist um die Wartezeit
-        weitergelaufen → die Wiedergabe überlebt das Sperren. Der Umbau lohnt sich.</li>
-    <li><strong>Stille, Position steht</strong> etwa dort, wo du gesperrt hast → sie überlebt es nicht.
-        Dann bleibt der Deeplink die bessere Lösung, und niemand muss Caddy anfassen.</li>
+    <li><strong>Einmal sperren, dann liegen lassen.</strong> Jedes Antippen macht die Seite kurz
+        sichtbar und startet eine neue Messung — die kurzen Zwischenwerte verwässern das Bild.</li>
+    <li><strong>Mindestens zehn Minuten warten.</strong> Eine Minute beweist nichts: iOS beendet
+        Hintergrundwiedergabe gern erst nach einigen Minuten.</li>
+    <li>Danach entsperren und die beiden fetten Zeilen vergleichen.</li>
   </ol>
-  <p style="margin-top:10px">Das Gehör entscheidet, nicht die Zahlen: Die Seite selbst wird beim
-     Sperren angehalten und kann sich irren. Achte darauf, ob der Ton weiterläuft.</p>
+  <p style="margin-top:10px">Gleiche Werte → die Wiedergabe überlebt das Sperren, der Umbau lohnt
+     sich. „Ton gelaufen" deutlich kleiner → iOS hat abgebrochen, und der Deeplink bleibt die
+     bessere Lösung.</p>
 </div>
 
 <div id="log">Bereit.</div>
@@ -118,7 +126,7 @@ const SCOPES    = "streaming user-read-email user-read-private user-modify-playb
 const ALBUM     = "0IakudBXfN2aYXChl5sEK7";   // Peppa Wutz, Folge 001 -- aus der App geholt
 
 let token = null, player = null, deviceId = null;
-let letzterTick = Date.now(), groessteLuecke = 0, wechsel = 0;
+let letzterTick = Date.now(), wechsel = 0;
 let posVorher = null;
 
 function log(text, klasse) {
@@ -189,6 +197,7 @@ function playerStarten() {
     setz("sPlayer", "verbunden");
     document.getElementById("playBtn").disabled = false;
     document.getElementById("resumeBtn").disabled = false;
+    kapitelLaden();
     log("Player bereit, Geraete-ID " + device_id.slice(0, 12) + "…", "gut");
   });
   player.addListener("not_ready", () => { setz("sPlayer", "offline"); log("Player offline", "schlecht"); });
@@ -259,36 +268,88 @@ async function abspielen() {
 const start = Date.now();
 setInterval(() => {
   const jetzt = Date.now();
-  const luecke = jetzt - letzterTick;
-  if (luecke > groessteLuecke) { groessteLuecke = luecke; setz("sLuecke", (luecke / 1000).toFixed(1) + " s"); }
   letzterTick = jetzt;
   setz("uhr", ((jetzt - start) / 1000).toFixed(1).replace(".", ",") + " s");
 }, 100);
+
+// Kapitellaengen des Albums, einmal geholt. Ohne sie ist jede Messung
+// wertlos: die Position zaehlt pro Kapitel und faellt beim Kapitelwechsel
+// auf null zurueck. Ein Sprung von 0:24 auf 0:06 kann "abgebrochen"
+// heissen -- oder "inzwischen drei Kapitel weiter". Erst die Summe der
+// vorherigen Kapitel macht daraus eine Zahl, die monoton steigt.
+let kapitel = [];   // [{uri, dauer, vorlauf}]
+
+async function kapitelLaden() {
+  try {
+    const r = await fetch("https://api.spotify.com/v1/albums/" + ALBUM + "/tracks?market=DE&limit=50",
+      { headers: { Authorization: "Bearer " + token } });
+    const d = await r.json();
+    let summe = 0;
+    kapitel = (d.items || []).map(t => {
+      const eintrag = { uri: t.uri, dauer: t.duration_ms, vorlauf: summe };
+      summe += t.duration_ms;
+      return eintrag;
+    });
+    log("Kapitel geladen: " + kapitel.length + ", Gesamtlaenge " + mmss(summe));
+  } catch (e) {
+    log("Kapitel konnten nicht geladen werden: " + e.message, "schlecht");
+  }
+}
+
+// Position im gesamten Album statt im aktuellen Kapitel.
+function gesamtPosition(zustand) {
+  if (!zustand || !zustand.track_window || !zustand.track_window.current_track) return null;
+  const uri = zustand.track_window.current_track.uri;
+  const k = kapitel.find(x => x.uri === uri);
+  if (!k) return zustand.position;          // Album unbekannt: besser als nichts
+  return k.vorlauf + zustand.position;
+}
+
+let wandVorher = null;
 
 document.addEventListener("visibilitychange", async () => {
   wechsel++;
   setz("sWechsel", String(wechsel));
   if (!player) return;
   const z = await player.getCurrentState();
+  const gesamt = gesamtPosition(z);
+
   if (document.hidden) {
-    posVorher = z ? z.position : null;
-    setz("sVorher", mmss(posVorher));
-    log("versteckt bei " + mmss(posVorher));
+    posVorher = gesamt;
+    wandVorher = Date.now();
+    setz("sVorher", mmss(gesamt));
+    log("versteckt bei " + mmss(gesamt) + " (Albumzeit)");
+    return;
+  }
+
+  setz("sNachher", mmss(gesamt));
+  if (posVorher === null || gesamt === null || wandVorher === null) {
+    log("wieder sichtbar bei " + mmss(gesamt));
+    return;
+  }
+
+  // Die beiden Zahlen, auf die es ankommt -- nebeneinander, ohne Deutung.
+  const wandS  = (Date.now() - wandVorher) / 1000;
+  const tonS   = (gesamt - posVorher) / 1000;
+  const anteil = wandS > 0 ? tonS / wandS : 0;
+
+  setz("sWand", wandS.toFixed(0) + " s");
+  setz("sTon",  tonS.toFixed(0) + " s");
+  log("weg: " + wandS.toFixed(0) + " s Wanduhr — Ton lief: " + tonS.toFixed(0) + " s");
+
+  if (wandS < 5) {
+    setz("sErgebnis", "zu kurz");
+    log("unter 5 s — nur ein Antippen, nicht gewertet");
+  } else if (anteil >= 0.8) {
+    setz("sErgebnis", "lief komplett durch");
+    log("Ton deckt " + Math.round(anteil * 100) + " % der Zeit ab — lief durch", "gut");
+  } else if (anteil <= 0.2) {
+    setz("sErgebnis", "sofort gestoppt");
+    log("Ton deckt nur " + Math.round(anteil * 100) + " % ab — praktisch sofort gestoppt", "schlecht");
   } else {
-    const nachher = z ? z.position : null;
-    setz("sNachher", mmss(nachher));
-    log("wieder sichtbar bei " + mmss(nachher));
-    if (posVorher !== null && nachher !== null) {
-      const gelaufen = nachher - posVorher;
-      const weg = groessteLuecke;
-      if (gelaufen > weg * 0.5) {
-        setz("sErgebnis", "lief weiter");
-        log("Position um " + (gelaufen / 1000).toFixed(1) + " s weiter — spricht fuer Weiterlaufen", "gut");
-      } else {
-        setz("sErgebnis", "stand still");
-        log("Position kaum weiter (" + (gelaufen / 1000).toFixed(1) + " s) — spricht fuer Abbruch", "schlecht");
-      }
-    }
+    setz("sErgebnis", "nach ~" + tonS.toFixed(0) + " s gestoppt");
+    log("Ton deckt " + Math.round(anteil * 100) + " % ab — lief an und brach nach etwa "
+        + tonS.toFixed(0) + " s ab", "schlecht");
   }
 });
 
