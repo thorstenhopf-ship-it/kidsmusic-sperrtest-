@@ -134,7 +134,44 @@ function log(text, klasse) {
   const zeit = new Date().toLocaleTimeString("de-DE");
   el.innerHTML += `\n<span class="${klasse || ""}">${zeit}  ${text}</span>`;
   el.scrollTop = el.scrollHeight;
+  // Fehler zusaetzlich gross und oben anzeigen, damit man sie ohne Scrollen liest.
+  if (klasse === "schlecht") fehlerOben(text);
 }
+
+// Prominente Fehleranzeige oben. Wird beim ersten Fehler erzeugt.
+function fehlerOben(text) {
+  let box = document.getElementById("fehlerBox");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "fehlerBox";
+    box.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:999;background:#3a0d0d;"
+      + "color:#ffb3b3;font:600 0.9rem/1.4 ui-monospace,Menlo,monospace;padding:12px 14px;"
+      + "border-bottom:2px solid #ff6b6b;white-space:pre-wrap;word-break:break-word;max-height:55vh;overflow:auto";
+    document.body.appendChild(box);
+  }
+  box.textContent = "LETZTER FEHLER:\n" + text;
+}
+
+// Die ECHTEN SDK-Fehler landen in der Browser-Konsole, nicht im message-Feld.
+// Auf dem iPad kommt man da normal nicht ran -- also fangen wir console.error
+// und console.warn hier ab und schreiben sie ins Log. Das Spotify-SDK loggt
+// dort mit Prefix "[Spotify-Web-Playback-SDK]" seine wahren Ursachen.
+(function konsoleAbfangen() {
+  ["error", "warn"].forEach(stufe => {
+    const orig = console[stufe].bind(console);
+    console[stufe] = (...args) => {
+      try {
+        const txt = args.map(a =>
+          typeof a === "string" ? a
+            : (a && a.message) ? a.message
+            : (() => { try { return JSON.stringify(a); } catch (e) { return String(a); } })()
+        ).join(" ");
+        log("console." + stufe + ": " + txt.slice(0, 300), "schlecht");
+      } catch (e) { /* nie den Original-Log stoeren */ }
+      orig(...args);
+    };
+  });
+})();
 function setz(id, wert) { document.getElementById(id).textContent = wert; }
 function mmss(ms) {
   if (ms === null || ms === undefined) return "–";
@@ -205,7 +242,19 @@ function playerStarten() {
   player.addListener("authentication_error", ({ message }) => log("Auth-Fehler: " + message, "schlecht"));
   player.addListener("account_error", ({ message }) =>
     log("Konto-Fehler (Premium noetig?): " + message, "schlecht"));
-  player.addListener("playback_error", ({ message }) => log("Wiedergabe-Fehler: " + message, "schlecht"));
+  player.addListener("playback_error", (e) => {
+    // Ganzes Objekt zeigen, nicht nur message -- manchmal steckt mehr drin.
+    let voll;
+    try { voll = JSON.stringify(e); } catch (x) { voll = String(e); }
+    log("Wiedergabe-Fehler: " + (e && e.message ? e.message : "?") + "  | roh: " + voll, "schlecht");
+    // Zustand direkt nach dem Fehler -- verraet, ob ueberhaupt ein Track geladen wurde.
+    player.getCurrentState().then(z => {
+      if (!z) { log("  Zustand nach Fehler: KEINER (kein Track geladen)", "schlecht"); return; }
+      const t = z.track_window && z.track_window.current_track;
+      log("  Zustand: paused=" + z.paused + " pos=" + z.position
+          + " track=" + (t ? t.name : "–") + " uri=" + (t ? t.uri : "–"), "schlecht");
+    });
+  });
 
   player.addListener("player_state_changed", zustand => {
     if (!zustand) { setz("sZustand", "kein Zustand"); return; }
