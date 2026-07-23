@@ -273,16 +273,12 @@ window.sdkStart = function () { log("SDK geladen"); if (token) playerStarten(); 
 async function abspielen() {
   if (!deviceId) return;
 
-  // MUSS als Erstes im Klick passieren, noch vor jedem await auf etwas
-  // anderes. Safari erlaubt Tonausgabe nur aus einer Ereigniskette, die
-  // direkt an einer Beruehrung haengt; wird zuerst das Netz befragt, ist
-  // die Kette unterbrochen und die Wiedergabe pausiert sofort wieder.
-  try {
-    await player.activateElement();
-    log("Player im Klick freigeschaltet", "gut");
-  } catch (e) {
-    log("activateElement fehlgeschlagen: " + e.message, "schlecht");
-  }
+  // TEST nach Forum-Hinweis: activateElement() wird BEWUSST NICHT aufgerufen.
+  // Der Player ist im onSpotifyWebPlaybackSDKReady-Callback initialisiert;
+  // ein Forennutzer berichtet, dass genau dann activateElement ueberfluessig
+  // ist -- und dass der Aufruf in aktuellen SDK-Versionen die Wiedergabe auf
+  // Safari (Desktop wie Mobil) sogar verhindert.
+  log("TEST: OHNE activateElement", "gut");
 
   log("starte Album …");
   const r = await fetch("https://api.spotify.com/v1/me/player/play?device_id=" + deviceId, {
@@ -407,9 +403,7 @@ document.addEventListener("visibilitychange", async () => {
 document.getElementById("loginBtn").onclick = anmelden;
 document.getElementById("playBtn").onclick = abspielen;
 document.getElementById("resumeBtn").onclick = async () => {
-  // Bewusst ohne vorheriges await: der Aufruf soll so nah wie moeglich an
-  // der Beruehrung haengen.
-  try { await player.activateElement(); } catch (e) { /* schon aktiv */ }
+  // TEST: ebenfalls ohne activateElement.
   try { await player.resume(); log("resume() aus Beruehrung", "gut"); }
   catch (e) { log("resume() fehlgeschlagen: " + e.message, "schlecht"); }
 };
