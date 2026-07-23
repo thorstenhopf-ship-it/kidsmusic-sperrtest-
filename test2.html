@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KidsMusic — Test 2 (nach funktionierendem Beispiel)</title>
+<style>
+body { background:#080810; color:#fff; font-family:system-ui,sans-serif; padding:18px; max-width:640px; margin:0 auto; }
+h1 { font-size:1.2rem; color:#f7c948; }
+p { color:#ccd; font-size:0.9rem; line-height:1.5; }
+button { background:#1DB954; color:#000; border:0; border-radius:50px; font-weight:900; font-size:1.05rem; padding:14px 26px; margin:6px 6px 0 0; }
+button.zweit { background:rgba(255,255,255,.1); color:#fff; }
+button:disabled { background:#2a2a3a; color:#888; }
+#log { background:#07070d; border-radius:10px; padding:12px; margin-top:16px; font-size:0.78rem;
+       font-family:ui-monospace,Menlo,monospace; color:#9fd; max-height:50vh; overflow-y:auto;
+       white-space:pre-wrap; word-break:break-word; }
+.gut{color:#7fffa0;} .schlecht{color:#ff8080;}
+#fehlerBox { position:fixed;top:0;left:0;right:0;z-index:999;background:#3a0d0d;color:#ffb3b3;
+             font:600 0.9rem/1.4 ui-monospace,Menlo,monospace;padding:12px 14px;border-bottom:2px solid #ff6b6b;
+             white-space:pre-wrap;word-break:break-word;max-height:45vh;overflow:auto;display:none; }
+</style>
+</head>
+<body>
+<div id="fehlerBox"></div>
+<h1>Test 2 — nach dem funktionierenden Beispiel</h1>
+<p>Zwei getrennte Berührungen wie im Beispiel: erst <b>Init Player</b> (erzeugt den Player
+in dieser Berührung, mit activateElement), dann <b>Play</b> (spielt einen <b>einzelnen Track</b>,
+nicht ein Album).</p>
+
+<button id="loginBtn">1 · Mit Spotify anmelden</button>
+<button id="initBtn" class="zweit" disabled>2 · Init Player</button>
+<button id="playBtn" disabled>3 · Play (Einzeltrack)</button>
+
+<div id="log">Bereit.</div>
+
+<script>
+// Fehler prominent oben + Konsole abfangen (SDK loggt echte Ursachen dorthin).
+(function(){
+  const orig={};
+  ["error","warn"].forEach(s=>{ orig[s]=console[s].bind(console);
+    console[s]=(...a)=>{ try{ log("console."+s+": "+a.map(x=>typeof x==="string"?x:(x&&x.message)||(()=>{try{return JSON.stringify(x)}catch(e){return String(x)}})()).join(" ").slice(0,300),"schlecht"); }catch(e){} orig[s](...a); };
+  });
+})();
+function log(t,k){ const el=document.getElementById("log"); el.innerHTML+="\n<span class='"+(k||"")+"'>"+new Date().toLocaleTimeString("de-DE")+"  "+t+"</span>"; el.scrollTop=el.scrollHeight;
+  if(k==="schlecht"){ const b=document.getElementById("fehlerBox"); b.style.display="block"; b.textContent="LETZTER FEHLER:\n"+t; } }
+window.addEventListener("error",e=>log("JS-FEHLER: "+e.message,"schlecht"));
+
+const CLIENT_ID="2cb5067a8bfe4fbc92088f1cad7a775b";
+const REDIRECT=location.origin+location.pathname;
+const SCOPES="streaming user-read-email user-read-private user-modify-playback-state user-read-playback-state";
+// Ein EINZELNER Track (Peppa, "Die Ritterburg - Teil 1") -- kein Album.
+const TRACK="spotify:track:6Ac7ZQZZF57jeQnW6AVqY8";
+
+let token=null, player=null, deviceId=null;
+
+// --- PKCE-Login ---
+function rnd(n){const a=new Uint8Array(n);crypto.getRandomValues(a);return Array.from(a,b=>("0"+b.toString(16)).slice(-2)).join("").slice(0,n);}
+async function challenge(v){const b=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(v));return btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=/g,"");}
+async function anmelden(){const v=rnd(64);sessionStorage.setItem("pkce_v",v);location.href="https://accounts.spotify.com/authorize?"+new URLSearchParams({client_id:CLIENT_ID,response_type:"code",redirect_uri:REDIRECT,scope:SCOPES,code_challenge_method:"S256",code_challenge:await challenge(v)});}
+async function codeEinloesen(code){const r=await fetch("https://accounts.spotify.com/api/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({grant_type:"authorization_code",code,redirect_uri:REDIRECT,client_id:CLIENT_ID,code_verifier:sessionStorage.getItem("pkce_v")})});const d=await r.json();if(!d.access_token){log("Login fehlgeschlagen: "+JSON.stringify(d),"schlecht");return;}token=d.access_token;localStorage.setItem("tok",token);history.replaceState({},"",REDIRECT);angemeldetUI();}
+
+function angemeldetUI(){ log("angemeldet","gut"); document.getElementById("initBtn").disabled=false; document.getElementById("loginBtn").disabled=true; }
+
+// --- SDK: NICHT im Ready-Callback initialisieren. Nur merken, dass es da ist. ---
+window.onSpotifyWebPlaybackSDKReady=function(){ log("SDK bereit (onSpotifyWebPlaybackSDKReady)"); };
+
+// initPlayer wird aus der BERUEHRUNG des Init-Knopfs gerufen -- genau wie im Beispiel.
+function initPlayer(){
+  if(!window.Spotify){ log("SDK noch nicht geladen, kurz warten und nochmal","schlecht"); return; }
+  if(player){ log("Player existiert schon"); return; }
+  player=new Spotify.Player({ name:"KidsMusic Test2", getOAuthToken:cb=>cb(token), volume:0.8 });
+
+  player.addListener("ready",({device_id})=>{ deviceId=device_id; log("READY device="+device_id.slice(0,10),"gut"); document.getElementById("playBtn").disabled=false; });
+  player.addListener("not_ready",()=>log("NOT_READY","schlecht"));
+  player.addListener("initialization_error",({message})=>log("INIT-ERR "+message,"schlecht"));
+  player.addListener("authentication_error",({message})=>log("AUTH-ERR "+message,"schlecht"));
+  player.addListener("account_error",({message})=>log("ACCOUNT-ERR "+message,"schlecht"));
+  player.addListener("playback_error",({message})=>log("PLAYBACK-ERR "+message,"schlecht"));
+  player.addListener("player_state_changed",z=>{ if(!z)return; const t=z.track_window&&z.track_window.current_track; log("STATE paused="+z.paused+" pos="+z.position+" trk="+(t?t.name:"–")); });
+
+  player.connect().then(ok=>log(ok?"connect ok":"connect abgelehnt",ok?"gut":"schlecht"));
+  // Wie im Beispiel: activateElement direkt hier, in der Init-Beruehrung.
+  player.activateElement().then(()=>log("activateElement (Init) ok","gut")).catch(e=>log("activateElement (Init) err "+e.message,"schlecht"));
+}
+
+async function apiPlay(){
+  const r=await fetch("https://api.spotify.com/v1/me/player/play?device_id="+deviceId,{method:"PUT",headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"},body:JSON.stringify({uris:[TRACK]})});
+  let txt=""; if(!r.ok&&r.status!==204) txt=" :: "+(await r.text().catch(()=>"")).slice(0,120);
+  log("PLAY uris:["+TRACK.slice(0,22)+"…] -> HTTP "+r.status+txt, r.ok||r.status===204?"gut":"schlecht");
+  return r.ok||r.status===204;
+}
+
+async function playTrack(){
+  if(!player||!deviceId){ log("Player/Device nicht bereit","schlecht"); return; }
+  // Wie im Beispiel: activateElement auch hier, dann play, mit Wiederholung.
+  player.activateElement().then(()=>{},()=>{});
+  let ok=await apiPlay();
+  if(ok) return;
+  await new Promise(w=>setTimeout(w,500)); ok=await apiPlay(); if(ok) return;
+  await new Promise(w=>setTimeout(w,500)); await apiPlay();
+}
+
+document.getElementById("loginBtn").onclick=anmelden;
+document.getElementById("initBtn").onclick=initPlayer;
+document.getElementById("playBtn").onclick=playTrack;
+
+(function(){ const code=new URLSearchParams(location.search).get("code"); if(code){codeEinloesen(code);return;} const t=localStorage.getItem("tok"); if(t){token=t;angemeldetUI();} else log("Bitte auf 1 tippen."); })();
+</script>
+<script src="https://sdk.scdn.co/spotify-player.js"></script>
+</body>
+</html>
